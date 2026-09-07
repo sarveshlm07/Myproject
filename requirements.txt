@@ -1,0 +1,6 @@
+streamlit>=1.38
+streamlit-autorefresh>=1.0.1
+pandas>=2.0
+numpy>=1.26
+plotly>=5.20
+kiteconnect>=5.0
