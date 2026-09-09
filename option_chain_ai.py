@@ -1,5 +1,5 @@
 # option_chain_ai.py
-# NiftyAI — OI wall / reversal / breakout intelligence
+# NiftyAI - Smart Option Chain / OI Intelligence
 
 import math
 import re
@@ -7,10 +7,12 @@ import re
 
 def _num(value, default=0.0):
     try:
-        x = float(str(value).replace(",", "").strip())
-        return x if math.isfinite(x) else float(default)
+        value = float(str(value).replace(",", "").strip())
+        if math.isfinite(value):
+            return value
     except Exception:
-        return float(default)
+        pass
+    return float(default)
 
 
 def _clip(value, low, high):
@@ -21,11 +23,13 @@ def _strike_from_symbol(symbol):
     try:
         match = re.search(
             r"(\d+(?:\.\d+)?)(?:CE|PE)$",
-            str(symbol).upper(),
+            str(symbol).upper()
         )
-        return float(match.group(1)) if match else 0.0
+        if match:
+            return float(match.group(1))
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 
 def _collect(option_data):
@@ -36,15 +40,9 @@ def _collect(option_data):
         if not isinstance(row, dict):
             continue
 
-        symbol = str(
-            row.get("symbol") or symbol or ""
-        ).upper()
+        symbol = str(row.get("symbol") or symbol).upper()
 
-        strike = _num(
-            row.get("strike"),
-            0.0,
-        )
-
+        strike = _num(row.get("strike"), 0.0)
         if strike <= 0:
             strike = _strike_from_symbol(symbol)
 
@@ -54,220 +52,116 @@ def _collect(option_data):
         item = {
             "symbol": symbol,
             "strike": strike,
-
-            "oi": max(
-                _num(row.get("oi")),
-                0.0,
-            ),
-
-            "change_oi": _num(
-                row.get("change_oi")
-            ),
-
+            "oi": max(_num(row.get("oi")), 0.0),
+            "change_oi": _num(row.get("change_oi")),
             "oi_change_short": _num(
-                row.get(
-                    "oi_change_short",
-                    row.get("change_oi"),
-                )
+                row.get("oi_change_short", row.get("change_oi"))
             ),
-
-            "oi_slope": _num(
-                row.get("oi_slope")
-            ),
-
-            "volume": max(
-                _num(row.get("volume")),
-                0.0,
-            ),
-
-            "volume_change_short": _num(
-                row.get("volume_change_short")
-            ),
-
-            "price_slope": _num(
-                row.get("price_slope")
-            ),
-
-            "price_change_short": _num(
-                row.get("price_change_short")
-            ),
-
-            "last_price": _num(
-                row.get(
-                    "last_price",
-                    row.get("ltp"),
-                )
-            ),
-
+            "oi_slope": _num(row.get("oi_slope")),
+            "volume": max(_num(row.get("volume")), 0.0),
+            "volume_change_short": _num(row.get("volume_change_short")),
+            "last_price": _num(row.get("last_price")),
+            "price_slope": _num(row.get("price_slope")),
+            "price_change_short": _num(row.get("price_change_short")),
             "buy_qty": max(
                 _num(
                     row.get(
                         "buy_quantity",
-                        row.get("buy_qty"),
+                        row.get("buy_qty", 0.0)
                     )
                 ),
-                0.0,
+                0.0
             ),
-
             "sell_qty": max(
                 _num(
                     row.get(
                         "sell_quantity",
-                        row.get("sell_qty"),
+                        row.get("sell_qty", 0.0)
                     )
                 ),
-                0.0,
+                0.0
             ),
         }
 
         if symbol.endswith("CE"):
             calls.append(item)
-
         elif symbol.endswith("PE"):
             puts.append(item)
 
     return calls, puts
 
 
-def _rank_walls(items, spot, side):
-    """
-    Rank nearby OI walls.
-
-    CE above spot = resistance candidates.
-    PE below spot = support candidates.
-    """
-
-    if not items:
+def _rank_walls(rows, spot, side):
+    if not rows:
         return []
 
     if side == "CE":
-        candidates = [
-            x for x in items
-            if x["strike"] >= spot
-        ]
+        candidates = [x for x in rows if x["strike"] >= spot]
     else:
-        candidates = [
-            x for x in items
-            if x["strike"] <= spot
-        ]
+        candidates = [x for x in rows if x["strike"] <= spot]
 
     if not candidates:
-        candidates = list(items)
+        candidates = list(rows)
 
     total_oi = max(
-        sum(
-            max(x["oi"], 0.0)
-            for x in candidates
-        ),
-        1.0,
+        sum(max(x["oi"], 0.0) for x in candidates),
+        1.0
     )
 
     total_volume = max(
-        sum(
-            max(x["volume"], 0.0)
-            for x in candidates
-        ),
-        1.0,
+        sum(max(x["volume"], 0.0) for x in candidates),
+        1.0
     )
 
-    max_abs_slope = max(
-        (
-            abs(x["oi_slope"])
-            for x in candidates
-        ),
-        default=1.0,
-    )
-
-    max_abs_slope = max(
-        max_abs_slope,
-        1.0,
+    max_slope = max(
+        [abs(x["oi_slope"]) for x in candidates] + [1.0]
     )
 
     ranked = []
 
-    for x in candidates:
-        distance = abs(
-            x["strike"] - spot
-        )
+    for row in candidates:
+        distance = abs(row["strike"] - spot)
+        proximity = 1.0 / (1.0 + distance / 100.0)
 
-        proximity = (
-            1.0 /
-            (1.0 + distance / 100.0)
-        )
+        oi_share = row["oi"] / total_oi
+        volume_share = row["volume"] / total_volume
 
-        oi_share = (
-            max(x["oi"], 0.0)
-            / total_oi
-        )
-
-        volume_share = (
-            max(x["volume"], 0.0)
-            / total_volume
-        )
-
-        build = (
-            max(x["oi_slope"], 0.0)
-            / max_abs_slope
-        )
-
-        unwind = (
-            max(-x["oi_slope"], 0.0)
-            / max_abs_slope
-        )
+        build = max(row["oi_slope"], 0.0) / max_slope
+        unwind = max(-row["oi_slope"], 0.0) / max_slope
 
         strength = (
-            0.52 * oi_share
-            + 0.10 * volume_share
-            + 0.22 * proximity
-            + 0.13 * min(build, 1.0)
-            - 0.08 * min(unwind, 1.0)
-            + 0.03 * min(
-                abs(x["price_slope"]) / 2.0,
-                1.0,
-            )
+            oi_share * 0.52
+            + volume_share * 0.10
+            + proximity * 0.22
+            + min(build, 1.0) * 0.13
+            - min(unwind, 1.0) * 0.08
+            + min(abs(row["price_slope"]) / 2.0, 1.0) * 0.03
         )
 
-        ranked.append({
-            **x,
-            "distance": float(distance),
-            "strength": float(
-                _clip(
-                    strength,
-                    0.0,
-                    1.25,
-                )
-            ),
-        })
+        ranked.append(
+            {
+                **row,
+                "distance": float(distance),
+                "strength": float(_clip(strength, 0.0, 1.25)),
+            }
+        )
 
     ranked.sort(
-        key=lambda z: z["strength"],
-        reverse=True,
+        key=lambda x: x["strength"],
+        reverse=True
     )
 
     return ranked
 
 
 def _wall_evidence(wall, side):
-    """
-    PE:
-        HOLD/BOUNCE = support holding
-        BREAK       = support weakening
-
-    CE:
-        HOLD/REJECT = resistance holding
-        BREAKOUT    = resistance weakening
-    """
-
     if not wall:
         return 0.0, 0.0, "UNKNOWN"
 
     hold = 0.0
     break_score = 0.0
 
-    oi = max(
-        wall["oi"],
-        1.0,
-    )
+    oi = max(wall["oi"], 1.0)
 
     oi_slope = wall["oi_slope"]
     oi_short = wall["oi_change_short"]
@@ -275,158 +169,84 @@ def _wall_evidence(wall, side):
     price_slope = wall["price_slope"]
     price_short = wall["price_change_short"]
 
-    strength = _clip(
-        wall["strength"],
-        0.0,
-        1.0,
-    )
+    strength = _clip(wall["strength"], 0.0, 1.0)
+    distance = max(wall["distance"], 0.0)
 
-    distance = max(
-        wall["distance"],
-        0.0,
-    )
-
-    # -----------------------------------------------------
-    # WALL STRENGTH
-    # -----------------------------------------------------
-
-    hold += strength * 2.4
+    # Base wall importance
+    hold += strength * 2.5
 
     if distance <= 25:
-        hold += 0.6
-
+        hold += 0.7
     elif distance <= 50:
-        hold += 0.3
+        hold += 0.35
 
-    # -----------------------------------------------------
-    # OI BUILD / UNWIND
-    # -----------------------------------------------------
+    slope_ratio = oi_slope / oi
+    short_ratio = oi_short / oi
 
-    slope_ratio = (
-        oi_slope / oi
-    )
-
-    short_ratio = (
-        oi_short / oi
-    )
-
-    if slope_ratio > 0.00035:
+    # OI building = wall strengthening
+    if slope_ratio >= 0.00035:
         hold += 2.4
-
     elif slope_ratio > 0:
         hold += 1.2
 
-    elif slope_ratio < -0.00035:
+    # OI unwinding = wall weakening
+    if slope_ratio <= -0.00035:
         break_score += 2.6
-
     elif slope_ratio < 0:
         break_score += 1.2
 
-    if short_ratio > 0.002:
-        hold += 1.6
+    if short_ratio >= 0.002:
+        hold += 1.4
+    elif short_ratio <= -0.002:
+        break_score += 1.6
 
-    elif short_ratio < -0.002:
-        break_score += 1.8
-
-    # -----------------------------------------------------
-    # PRICE + OI RELATION
-    # -----------------------------------------------------
-
+    # PE WALL = support
     if side == "PE":
+        if oi_slope > 0 and price_slope > 0:
+            hold += 1.2
 
-        # PE wall getting stronger.
-        if (
-            oi_slope > 0
-            and price_slope > 0
-        ):
-            hold += 1.4
+        if oi_slope < 0 and price_slope > 0:
+            break_score += 1.6
 
-        # PE wall unwinding while PE premium rises:
-        # support failure risk.
-        if (
-            oi_slope < 0
-            and price_slope > 0
-        ):
-            break_score += 1.8
+        if oi_short > 0 and price_short > 0:
+            hold += 0.6
 
-        if (
-            price_short > 0
-            and oi_short > 0
-        ):
-            hold += 0.8
-
-        if (
-            price_short > 0
-            and oi_short < 0
-        ):
+        if oi_short < 0 and price_short > 0:
             break_score += 0.8
 
+    # CE WALL = resistance
     else:
+        if oi_slope > 0 and price_slope > 0:
+            hold += 1.2
 
-        # CE wall strengthening.
-        if (
-            oi_slope > 0
-            and price_slope > 0
-        ):
-            hold += 1.4
+        if oi_slope < 0 and price_slope < 0:
+            break_score += 1.6
 
-        # CE OI unwinding + premium weakening:
-        # resistance opening.
-        if (
-            oi_slope < 0
-            and price_slope < 0
-        ):
-            break_score += 1.8
+        if oi_short > 0 and price_short > 0:
+            hold += 0.6
 
-        if (
-            price_short > 0
-            and oi_short > 0
-        ):
-            hold += 0.8
-
-        if (
-            price_short < 0
-            and oi_short < 0
-        ):
+        if oi_short < 0 and price_short < 0:
             break_score += 0.8
 
-    # -----------------------------------------------------
-    # FINAL WALL STATE
-    # -----------------------------------------------------
+    if hold >= 3.0 and hold >= break_score + 1.5:
+        if side == "PE":
+            behaviour = "HOLD/BOUNCE"
+        else:
+            behaviour = "HOLD/REJECT"
 
-    if (
-        hold >= break_score + 1.5
-        and hold >= 3.0
-    ):
-
-        behaviour = (
-            "HOLD/BOUNCE"
-            if side == "PE"
-            else "HOLD/REJECT"
-        )
-
-    elif (
-        break_score >= hold + 1.2
-        and break_score >= 2.8
-    ):
-
-        behaviour = (
-            "BREAK"
-            if side == "PE"
-            else "BREAKOUT"
-        )
+    elif break_score >= 2.8 and break_score >= hold + 1.2:
+        if side == "PE":
+            behaviour = "BREAK"
+        else:
+            behaviour = "BREAKOUT"
 
     else:
         behaviour = "UNKNOWN"
 
-    return (
-        float(hold),
-        float(break_score),
-        behaviour,
-    )
+    return float(hold), float(break_score), behaviour
 
 
-def _directional_bias(
+def _option_bias(
     calls,
     puts,
     pcr,
@@ -437,154 +257,93 @@ def _directional_bias(
 ):
     bullish = 0.0
     bearish = 0.0
-
     reasons = []
 
-    # -----------------------------------------------------
-    # PCR — CONTEXT ONLY
-    # -----------------------------------------------------
-
+    # PCR only as context
     if 1.05 <= pcr <= 1.45:
         bullish += 1.5
-
-        reasons.append(
-            f"PCR {pcr:.2f}: mildly supportive"
-        )
+        reasons.append(f"PCR {pcr:.2f}: mildly bullish")
 
     elif 0 < pcr < 0.90:
         bearish += 1.5
-
-        reasons.append(
-            f"PCR {pcr:.2f}: mildly bearish"
-        )
+        reasons.append(f"PCR {pcr:.2f}: mildly bearish")
 
     elif pcr > 1.60:
-        reasons.append(
-            f"PCR {pcr:.2f}: elevated/crowded"
-        )
+        reasons.append(f"PCR {pcr:.2f}: elevated")
 
-    # -----------------------------------------------------
-    # AGGREGATE OI MOVEMENT
-    # -----------------------------------------------------
+    call_slope = sum(x["oi_slope"] for x in calls)
+    put_slope = sum(x["oi_slope"] for x in puts)
 
-    put_slope = sum(
-        x["oi_slope"]
-        for x in puts
-    )
-
-    call_slope = sum(
-        x["oi_slope"]
-        for x in calls
-    )
-
+    # Put writing = support
     if put_slope > 0:
-        bullish += min(
-            2.5,
-            abs(put_slope) / 8000.0,
-        )
-
+        bullish += min(2.5, abs(put_slope) / 8000.0)
     elif put_slope < 0:
-        bearish += min(
-            2.5,
-            abs(put_slope) / 8000.0,
-        )
+        bearish += min(2.5, abs(put_slope) / 8000.0)
 
+    # Call writing = resistance
     if call_slope > 0:
-        bearish += min(
-            2.5,
-            abs(call_slope) / 8000.0,
-        )
-
+        bearish += min(2.5, abs(call_slope) / 8000.0)
     elif call_slope < 0:
-        bullish += min(
-            2.5,
-            abs(call_slope) / 8000.0,
-        )
+        bullish += min(2.5, abs(call_slope) / 8000.0)
 
-    # -----------------------------------------------------
-    # NEAREST WALL REACTION
-    # More important than generic PCR.
-    # -----------------------------------------------------
-
+    # Wall behaviour gets major weight
     bullish += min(
         7.0,
-        support_hold
-        + resistance_break,
+        support_hold + resistance_break
     )
 
     bearish += min(
         7.0,
-        resistance_hold
-        + support_break,
+        resistance_hold + support_break
     )
 
-    # -----------------------------------------------------
-    # DEPTH — SMALL CONFIRMATION ONLY
-    # -----------------------------------------------------
+    # Depth only minor confirmation
+    ce_buy = sum(x["buy_qty"] for x in calls)
+    ce_sell = sum(x["sell_qty"] for x in calls)
 
-    total_buy_ce = sum(
-        x["buy_qty"]
-        for x in calls
-    )
+    pe_buy = sum(x["buy_qty"] for x in puts)
+    pe_sell = sum(x["sell_qty"] for x in puts)
 
-    total_sell_ce = sum(
-        x["sell_qty"]
-        for x in calls
-    )
+    if ce_buy > ce_sell * 1.15:
+        bullish += 0.7
 
-    total_buy_pe = sum(
-        x["buy_qty"]
-        for x in puts
-    )
+    if ce_sell > ce_buy * 1.15:
+        bearish += 0.7
 
-    total_sell_pe = sum(
-        x["sell_qty"]
-        for x in puts
-    )
+    if pe_buy > pe_sell * 1.15:
+        bearish += 0.7
 
-    if (
-        total_buy_ce >
-        total_sell_ce * 1.15
-    ):
-        bullish += 0.8
+    if pe_sell > pe_buy * 1.15:
+        bullish += 0.7
 
-    if (
-        total_sell_ce >
-        total_buy_ce * 1.15
-    ):
-        bearish += 0.8
-
-    if (
-        total_buy_pe >
-        total_sell_pe * 1.15
-    ):
-        bearish += 0.8
-
-    if (
-        total_sell_pe >
-        total_buy_pe * 1.15
-    ):
-        bullish += 0.8
+    bullish = _clip(bullish, 0.0, 15.0)
+    bearish = _clip(bearish, 0.0, 15.0)
 
     return (
-        float(
-            _clip(
-                bullish,
-                0.0,
-                15.0,
-            )
-        ),
-        float(
-            _clip(
-                bearish,
-                0.0,
-                15.0,
-            )
-        ),
+        float(bullish),
+        float(bearish),
         reasons,
         float(call_slope),
         float(put_slope),
     )
+
+
+def _wall_export(rows):
+    result = []
+
+    for x in rows[:5]:
+        result.append(
+            {
+                "strike": float(x["strike"]),
+                "oi": float(x["oi"]),
+                "oi_slope": float(x["oi_slope"]),
+                "price_slope": float(x["price_slope"]),
+                "strength": float(x["strength"]),
+                "distance": float(x["distance"]),
+            }
+        )
+
+    return result
 
 
 def analyze_option_chain(
@@ -592,63 +351,29 @@ def analyze_option_chain(
     spot_price=None,
     return_details=False,
 ):
-    """
-    Main NiftyAI option-chain analyzer.
-
-    Compatible with current app.py:
-
-    bull_oc, bear_oc, reasons =
-        analyze_option_chain(...)
-
-    OR
-
-    bull_oc, bear_oc, reasons, details =
-        analyze_option_chain(
-            ...,
-            return_details=True
-        )
-    """
-
-    calls, puts = _collect(
-        option_data
-    )
-
-    # -----------------------------------------------------
-    # NO DATA
-    # -----------------------------------------------------
+    calls, puts = _collect(option_data)
 
     if not calls and not puts:
-
         details = {
             "pcr": 0.0,
-
             "total_call_oi": 0.0,
             "total_put_oi": 0.0,
-
             "call_oi_change": 0.0,
             "put_oi_change": 0.0,
-
             "call_oi_slope": 0.0,
             "put_oi_slope": 0.0,
-
             "oi_support": None,
             "oi_resistance": None,
-
             "support_distance": None,
             "resistance_distance": None,
-
             "support_strength": 0.0,
             "resistance_strength": 0.0,
-
             "support_behavior": "UNKNOWN",
             "resistance_behavior": "UNKNOWN",
-
             "support_hold_score": 0.0,
             "support_break_score": 0.0,
-
             "resistance_hold_score": 0.0,
             "resistance_break_score": 0.0,
-
             "top_call_walls": [],
             "top_put_walls": [],
         }
@@ -656,43 +381,26 @@ def analyze_option_chain(
         result = (
             0.0,
             0.0,
-            [
-                "No valid CE/PE option-chain data"
-            ],
+            ["No valid CE/PE option-chain data"],
         )
 
         if return_details:
-            return (
-                *result,
-                details,
-            )
+            return result[0], result[1], result[2], details
 
         return result
 
-    # -----------------------------------------------------
-    # SPOT
-    # -----------------------------------------------------
-
-    spot = _num(
-        spot_price,
-        0.0,
-    )
+    spot = _num(spot_price, 0.0)
 
     if spot <= 0:
-
-        strikes = [
+        all_strikes = [
             x["strike"]
             for x in calls + puts
         ]
 
-        spot = (
-            sum(strikes)
-            / max(len(strikes), 1)
+        spot = sum(all_strikes) / max(
+            len(all_strikes),
+            1
         )
-
-    # -----------------------------------------------------
-    # PCR
-    # -----------------------------------------------------
 
     total_call_oi = sum(
         max(x["oi"], 0.0)
@@ -704,27 +412,21 @@ def analyze_option_chain(
         for x in puts
     )
 
-    pcr = (
-        total_put_oi
-        / total_call_oi
-        if total_call_oi > 0
-        else 0.0
-    )
-
-    # -----------------------------------------------------
-    # FIND IMPORTANT WALLS
-    # -----------------------------------------------------
+    if total_call_oi > 0:
+        pcr = total_put_oi / total_call_oi
+    else:
+        pcr = 0.0
 
     ranked_calls = _rank_walls(
         calls,
         spot,
-        "CE",
+        "CE"
     )
 
     ranked_puts = _rank_walls(
         puts,
         spot,
-        "PE",
+        "PE"
     )
 
     call_wall = (
@@ -739,39 +441,17 @@ def analyze_option_chain(
         else None
     )
 
-    # -----------------------------------------------------
-    # SUPPORT / RESISTANCE BEHAVIOUR
-    # -----------------------------------------------------
-
-    (
-        support_hold,
-        support_break,
-        support_behavior,
-    ) = _wall_evidence(
+    support_hold, support_break, support_behavior = _wall_evidence(
         put_wall,
-        "PE",
+        "PE"
     )
 
-    (
-        resistance_hold,
-        resistance_break,
-        resistance_behavior,
-    ) = _wall_evidence(
+    resistance_hold, resistance_break, resistance_behavior = _wall_evidence(
         call_wall,
-        "CE",
+        "CE"
     )
 
-    # -----------------------------------------------------
-    # DIRECTIONAL OPTION BIAS
-    # -----------------------------------------------------
-
-    (
-        bull,
-        bear,
-        reasons,
-        call_slope,
-        put_slope,
-    ) = _directional_bias(
+    bull, bear, reasons, call_slope, put_slope = _option_bias(
         calls,
         puts,
         pcr,
@@ -781,72 +461,44 @@ def analyze_option_chain(
         resistance_break,
     )
 
-    # -----------------------------------------------------
-    # HUMAN-READABLE REASONS
-    # -----------------------------------------------------
-
     if put_wall:
-
         reasons.append(
-            f"PE OI wall "
-            f"{put_wall['strike']:.0f} | "
-            f"strength "
-            f"{put_wall['strength']:.2f} | "
+            f"PE OI support {put_wall['strike']:.0f} | "
+            f"strength {put_wall['strength']:.2f} | "
             f"{support_behavior}"
         )
 
-        if (
-            support_behavior
-            == "HOLD/BOUNCE"
-        ):
-
+        if support_behavior == "HOLD/BOUNCE":
             reasons.append(
-                "PE wall holding: fresh PE should be blocked unless support breakdown confirms"
+                "Support holding: avoid fresh PE unless breakdown confirms"
             )
 
-        elif (
-            support_behavior
-            == "BREAK"
-        ):
-
+        elif support_behavior == "BREAK":
             reasons.append(
-                "PE wall weakening: downside continuation becoming credible"
+                "Support weakening: downside continuation possible"
             )
 
     if call_wall:
-
         reasons.append(
-            f"CE OI wall "
-            f"{call_wall['strike']:.0f} | "
-            f"strength "
-            f"{call_wall['strength']:.2f} | "
+            f"CE OI resistance {call_wall['strike']:.0f} | "
+            f"strength {call_wall['strength']:.2f} | "
             f"{resistance_behavior}"
         )
 
-        if (
-            resistance_behavior
-            == "HOLD/REJECT"
-        ):
-
+        if resistance_behavior == "HOLD/REJECT":
             reasons.append(
-                "CE wall holding: fresh CE should be blocked unless breakout confirms"
+                "Resistance holding: avoid fresh CE unless breakout confirms"
             )
 
-        elif (
-            resistance_behavior
-            == "BREAKOUT"
-        ):
-
+        elif resistance_behavior == "BREAKOUT":
             reasons.append(
-                "CE wall weakening: upside continuation becoming credible"
+                "Resistance weakening: upside continuation possible"
             )
 
     if bull > bear + 2.0:
         final_bias = "BULLISH"
-
     elif bear > bull + 2.0:
         final_bias = "BEARISH"
-
     else:
         final_bias = "MIXED"
 
@@ -854,140 +506,87 @@ def analyze_option_chain(
         f"FINAL OPTION BIAS: {final_bias}"
     )
 
-    # -----------------------------------------------------
-    # DETAILS FOR prediction_engine.py
-    # -----------------------------------------------------
-
     details = {
         "pcr": float(pcr),
 
-        "total_call_oi":
-            float(total_call_oi),
+        "total_call_oi": float(total_call_oi),
+        "total_put_oi": float(total_put_oi),
 
-        "total_put_oi":
-            float(total_put_oi),
+        "call_oi_change": float(
+            sum(x["change_oi"] for x in calls)
+        ),
 
-        "call_oi_change":
-            float(
-                sum(
-                    x["change_oi"]
-                    for x in calls
-                )
-            ),
+        "put_oi_change": float(
+            sum(x["change_oi"] for x in puts)
+        ),
 
-        "put_oi_change":
-            float(
-                sum(
-                    x["change_oi"]
-                    for x in puts
-                )
-            ),
+        "call_oi_slope": float(call_slope),
+        "put_oi_slope": float(put_slope),
 
-        "call_oi_slope":
-            float(call_slope),
-
-        "put_oi_slope":
-            float(put_slope),
-
-        "oi_support":
+        "oi_support": (
             float(put_wall["strike"])
             if put_wall
-            else None,
+            else None
+        ),
 
-        "oi_resistance":
+        "oi_resistance": (
             float(call_wall["strike"])
             if call_wall
-            else None,
+            else None
+        ),
 
-        "support_distance":
-            float(
-                spot
-                - put_wall["strike"]
-            )
+        "support_distance": (
+            float(spot - put_wall["strike"])
             if put_wall
-            else None,
+            else None
+        ),
 
-        "resistance_distance":
-            float(
-                call_wall["strike"]
-                - spot
-            )
+        "resistance_distance": (
+            float(call_wall["strike"] - spot)
             if call_wall
-            else None,
+            else None
+        ),
 
-        "support_strength":
-            float(
-                put_wall["strength"]
-            )
+        "support_strength": (
+            float(put_wall["strength"])
             if put_wall
-            else 0.0,
+            else 0.0
+        ),
 
-        "resistance_strength":
-            float(
-                call_wall["strength"]
-            )
+        "resistance_strength": (
+            float(call_wall["strength"])
             if call_wall
-            else 0.0,
+            else 0.0
+        ),
 
-        "support_behavior":
-            support_behavior,
+        "support_behavior": support_behavior,
+        "resistance_behavior": resistance_behavior,
 
-        "resistance_behavior":
-            resistance_behavior,
+        "support_hold_score": float(support_hold),
+        "support_break_score": float(support_break),
 
-        "support_hold_score":
-            float(support_hold),
+        "resistance_hold_score": float(resistance_hold),
+        "resistance_break_score": float(resistance_break),
 
-        "support_break_score":
-            float(support_break),
+        "top_call_walls": _wall_export(
+            ranked_calls
+        ),
 
-        "resistance_hold_score":
-            float(resistance_hold),
+        "top_put_walls": _wall_export(
+            ranked_puts
+        ),
+    }
 
-        "resistance_break_score":
-            float(resistance_break),
+    if return_details:
+        return (
+            bull,
+            bear,
+            reasons,
+            details,
+        )
 
-        "top_call_walls": [
-            {
-                "strike":
-                    float(x["strike"]),
-
-                "oi":
-                    float(x["oi"]),
-
-                "oi_slope":
-                    float(x["oi_slope"]),
-
-                "price_slope":
-                    float(x["price_slope"]),
-
-                "strength":
-                    float(x["strength"]),
-
-                "distance":
-                    float(x["distance"]),
-            }
-            for x in ranked_calls[:5]
-        ],
-
-        "top_put_walls": [
-            {
-                "strike":
-                    float(x["strike"]),
-
-                "oi":
-                    float(x["oi"]),
-
-                "oi_slope":
-                    float(x["oi_slope"]),
-
-                "price_slope":
-                    float(x["price_slope"]),
-
-                "strength":
-                    float(x["strength"]),
-
-                "distance":
-                    float(x["distance"]),
-            }
-            for x in ranked_p
+    return (
+        bull,
+        bear,
+        reasons,
+    )
