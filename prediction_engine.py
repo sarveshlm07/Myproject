@@ -273,7 +273,7 @@ def _next_destination(price: float, direction: str, session: Dict[str, Any], oi:
     return p, price-p, name
 
 
-def predict_market(
+def _predict_market_core(
     df,
     support,
     resistance,
@@ -301,7 +301,7 @@ def predict_market(
 
     x = _normalize(df)
     if len(x) < 20:
-        return predict_market(None, support, resistance, bull_oc, bear_oc, oc_reasons, oc_details)
+        return _predict_market_core(None, support, resistance, bull_oc, bear_oc, oc_reasons, oc_details)
 
     atr = _atr(x)
     price = _f(x["Close"].iloc[-1])
@@ -384,4 +384,4 @@ def predict_market(
         if reaction["lower_rejection"] or reaction["failed_breakdown"] or (range_bottom and not reaction["breakdown_accept"]):
             late_pe_block = True; bear -= 2.5; reasons.append("Fresh PE blocked: extended fall has reached bounce/range-bottom territory")
 
-    # A fresh continuation after extension needs actual new acceptance, no
+    # A fresh continuation after extension needs actual new ac
