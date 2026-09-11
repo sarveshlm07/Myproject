@@ -533,4 +533,29 @@ oi_resistance = oc_details.get("oi_resistance")
 pcr = float(oc_details.get("pcr",0.0) or 0.0)
 o1,o2,o3,o4,o5 = st.columns(5)
 o1.metric("CE Bias", f"{bull_oc:.2f}")
-o2.metric(
+o2.metric("PE Bias", f"{bear_oc:.2f}")
+o3.metric("OI Support", f"{oi_support:.0f}" if oi_support else "—")
+o4.metric("OI Resistance", f"{oi_resistance:.0f}" if oi_resistance else "—")
+o5.metric("PCR", f"{pcr:.2f}")
+
+if oc_reasons:
+    with st.expander("Option Chain Details"):
+        for reason in oc_reasons:
+            st.write(f"• {reason}")
+
+st.subheader("AI Prediction Analysis")
+for reason in reasons[:24]:
+    st.write(f"• {reason}")
+
+st.subheader("Latest Market Data")
+st.dataframe(_safe_display_df(df.tail(10)), use_container_width=True)
+
+st.subheader("Live Tick")
+st.write(live_data.latest_tick if getattr(live_data,"latest_tick",None) else "Waiting for live tick...")
+
+st.caption(
+    f"Current candle: {current_candle.strftime('%H:%M')}–{next_candle_start.strftime('%H:%M')} | "
+    f"Prediction target: {next_candle_start.strftime('%H:%M')}–"
+    f"{(next_candle_start + pd.Timedelta(seconds=tf_seconds)).strftime('%H:%M')} | "
+    f"Time to next: {max(seconds_to_next,0):.0f}s"
+)
